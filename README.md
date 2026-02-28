@@ -1,5 +1,40 @@
 # τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains
 
+## Quick Start — CSE578 Phase 2 Custom Strategies
+
+### Run Adaptive Budget Forcing (ABF) — standalone
+```bash
+python run.py \
+  --agent-strategy abf \
+  --env airline \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --model-provider openai \
+  --user-model gpt-4o \
+  --user-model-provider openai \
+  --user-strategy llm \
+  --num-trials 1 \
+  --task-ids 0 1 2
+```
+
+### Run HA-TTS (Meta Controller — routes tasks to ABF / Beam / MCTS)
+```bash
+python run.py \
+  --agent-strategy ha-tts \
+  --env airline \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --model-provider openai \
+  --user-model gpt-4o \
+  --user-model-provider openai \
+  --user-strategy llm \
+  --num-trials 1 \
+  --task-ids 0 1 2
+```
+
+> **Note:** Requires vLLM server running locally at `http://localhost:8005/v1` for the agent model,
+> and `OPENAI_API_KEY` set in your environment for the user simulator.
+
+---
+
 **❗News**: We have released [τ²-bench](https://github.com/sierra-research/tau2-bench) as an extension of $\tau$-bench. $\tau^2$-bench includes code fixes and an additional `telecom` domain focusing on troubleshooting scenarios. Please use the $\tau^2$-bench as the latest version of this benchmark.
 
 **Paper**:
