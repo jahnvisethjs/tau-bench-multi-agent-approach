@@ -2,6 +2,7 @@
 
 import abc
 import enum
+import os
 from litellm import completion
 
 from typing import Optional, List, Dict, Any, Union
@@ -44,12 +45,16 @@ class LLMUserSimulationEnv(BaseUserSimulationEnv):
         self.reset()
 
     def generate_next_message(self, messages: List[Dict[str, Any]]) -> str:
+        api_base = os.getenv('USER_MODEL_API_BASE', None)
         res = completion(
-            model=self.model, custom_llm_provider=self.provider, messages=messages
+            model=self.model,
+            custom_llm_provider=self.provider,
+            messages=messages,
+            api_base=api_base,
         )
         message = res.choices[0].message
         self.messages.append(message.model_dump())
-        self.total_cost = res._hidden_params["response_cost"]
+        self.total_cost = res._hidden_params.get("response_cost", 0.0) if hasattr(res, "_hidden_params") else 0.0
         return message.content
 
     def build_system_prompt(self, instruction: Optional[str]) -> str:
@@ -115,12 +120,16 @@ User Response:
 <the user response (this will be parsed and sent to the agent)>"""
 
     def generate_next_message(self, messages: List[Dict[str, Any]]) -> str:
+        api_base = os.getenv('USER_MODEL_API_BASE', None)
         res = completion(
-            model=self.model, custom_llm_provider=self.provider, messages=messages
+            model=self.model,
+            custom_llm_provider=self.provider,
+            messages=messages,
+            api_base=api_base,
         )
         message = res.choices[0].message
         self.messages.append(message.model_dump())
-        self.total_cost = res._hidden_params["response_cost"]
+        self.total_cost = res._hidden_params.get("response_cost", 0.0) if hasattr(res, "_hidden_params") else 0.0
         return self.parse_response(message.content)
 
     def reset(self, instruction: Optional[str] = None) -> str:
@@ -164,11 +173,15 @@ class VerifyUserSimulationEnv(LLMUserSimulationEnv):
         attempts = 0
         cur_message = None
         while attempts < self.max_attempts:
+            api_base = os.getenv('USER_MODEL_API_BASE', None)
             res = completion(
-                model=self.model, custom_llm_provider=self.provider, messages=messages
+                model=self.model,
+                custom_llm_provider=self.provider,
+                messages=messages,
+                api_base=api_base,
             )
             cur_message = res.choices[0].message
-            self.total_cost = res._hidden_params["response_cost"]
+            self.total_cost = res._hidden_params.get("response_cost", 0.0) if hasattr(res, "_hidden_params") else 0.0
             if verify(self.model, self.provider, cur_message, messages):
                 self.messages.append(cur_message.model_dump())
                 return cur_message.content
