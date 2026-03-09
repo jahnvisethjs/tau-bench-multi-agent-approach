@@ -1,211 +1,232 @@
-# τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains
+# Enhancing Agent Reliability on τ-bench via Multi-Agent Test-Time Scaling
 
-## Quick Start — CSE578 Phase 2 Custom Strategies
+A multi-agent framework that improves LLM tool-calling agent performance on [τ-bench](https://arxiv.org/abs/2406.12045) through adaptive test-time scaling strategies, loop detection, enhanced prompting, and periodic self-reflection.
 
-### Run Adaptive Budget Forcing (ABF) — standalone
-```bash
-python run.py \
-  --agent-strategy abf \
-  --env airline \
-  --model Qwen/Qwen3-4B-Instruct-2507 \
-  --model-provider openai \
-  --user-model gpt-4o \
-  --user-model-provider openai \
-  --user-strategy llm \
-  --num-trials 1 \
-  --task-ids 0 1 2
+Built on top of [Sierra's τ-bench benchmark](https://github.com/sierra-research/tau-bench) for the CSE578 Agentic AI course.
+
+## Architecture
+
+```
+                    ┌──────────────────────┐
+                    │   MetaController     │
+                    │  (HA-TTS Router)     │
+                    │                      │
+                    │  LLM-based Difficulty │
+                    │     Estimator        │
+                    └──────┬───────────────┘
+                           │
+            ┌──────────────┼──────────────┬──────────────┐
+            │              │              │              │
+         easy           medium          hard        very_hard
+            │              │              │              │
+   ┌────────▼───┐  ┌───────▼──────┐ ┌────▼────────┐ ┌──▼───────┐
+   │ToolCalling │  │    ABF       │ │   ReAct +   │ │  Stub    │
+   │  Agent     │  │   Agent      │ │ Reflection  │ │(fallback)│
+   │  (1x)      │  │ (~1.5-2x)   │ │ (~1.2-1.5x) │ │          │
+   └────────────┘  └──────────────┘ └─────────────┘ └──────────┘
+         │              │              │              │
+         └──────────────┴──────────────┴──────────────┘
+                           │
+                  All agents include:
+                  • Loop Detector
+                  • Enhanced System Prompts
 ```
 
-### Run HA-TTS (Meta Controller — routes tasks to ABF / Beam / MCTS)
-```bash
-python run.py \
-  --agent-strategy ha-tts \
-  --env airline \
-  --model Qwen/Qwen3-4B-Instruct-2507 \
-  --model-provider openai \
-  --user-model gpt-4o \
-  --user-model-provider openai \
-  --user-strategy llm \
-  --num-trials 1 \
-  --task-ids 0 1 2
-```
+## Strategies
 
-> **Note:** Requires vLLM server running locally at `http://localhost:8005/v1` for the agent model,
-> and `OPENAI_API_KEY` set in your environment for the user simulator.
+| Strategy | CLI Flag | Description | Extra Cost |
+|---|---|---|---|
+| Tool Calling | `tool-calling` | Baseline native function calling via LiteLLM | 1x |
+| ReAct | `react` | Text-based reasoning (Thought → Action) | 1x |
+| ACT | `act` | Action-only, no explicit reasoning | 1x |
+| ABF | `abf` | Adaptive Budget Forcing — S1-style "Wait," reconsideration scaled by difficulty | ~1.5-2x |
+| ReAct + Reflection | `react-reflection` | ReAct with periodic reflection checkpoints every N tool calls | ~1.2-1.5x |
+| HA-TTS | `ha-tts` | Meta-controller that routes tasks to the best strategy based on LLM-estimated difficulty | Adaptive |
 
----
+## Key Improvements Over Baseline τ-bench
 
-**❗News**: We have released [τ²-bench](https://github.com/sierra-research/tau2-bench) as an extension of $\tau$-bench. $\tau^2$-bench includes code fixes and an additional `telecom` domain focusing on troubleshooting scenarios. Please use the $\tau^2$-bench as the latest version of this benchmark.
+| Feature | What It Does | Targets |
+|---|---|---|
+| **Loop Detector** | Detects repeated identical tool calls. Warning at 2x, force-break at 3x. Applied to all agents. | Looping & Inefficient Reasoning (up to 56% of errors) |
+| **Enhanced System Prompts** | Behavioral guardrails injected into all agents: anti-escalation, auth-first, constraint tracking, multi-step completion enforcement | Premature Escalation (up to 42%), Auth failures (up to 34%) |
+| **ReactReflectionAgent** | Every 4 tool calls, forces the agent to review progress, check constraints, and plan remaining steps | All error categories simultaneously |
+| **LLM Difficulty Estimator** | Replaces keyword-only heuristics with an LLM classification call (falls back to keywords on failure) | Better routing accuracy for HA-TTS |
 
-**Paper**:
-* [τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains](https://arxiv.org/abs/2406.12045)
-* [τ²-Bench: Evaluating Conversational Agents in a Dual-Control Environment](https://arxiv.org/abs/2506.07982)
+## Phase 1 Results (Baselines)
 
-We propose $\tau$-bench, a benchmark emulating dynamic conversations between a user (simulated by language models) and a language agent provided with domain-specific API tools and policy guidelines.
+**Setup**: User agent = Qwen3-30B-a3b-instruct-2507 (fixed). Tool-calling agent = Qwen3 (4B/8B/14B/32B).
 
-## Leaderboard
+### Airline Domain
 
-### Airline
+| Strategy | Model | pass^1 | pass^2 | pass^3 | pass^4 | pass^5 |
+|---|---|---|---|---|---|---|
+| ACT | Qwen3-4B | 0.273 | 0.213 | 0.180 | 0.158 | 0.142 |
+| ACT | Qwen3-8B | 0.310 | 0.190 | 0.150 | 0.130 | 0.110 |
+| ACT | Qwen3-14B | 0.256 | 0.162 | 0.138 | 0.128 | 0.120 |
+| ACT | Qwen3-32B | 0.370 | 0.240 | 0.190 | 0.160 | 0.146 |
+| ReAct | Qwen3-4B | 0.356 | 0.316 | 0.294 | 0.280 | 0.270 |
+| ReAct | Qwen3-8B | 0.287 | 0.183 | 0.145 | 0.126 | 0.113 |
+| ReAct | Qwen3-14B | 0.344 | 0.268 | 0.222 | 0.188 | 0.160 |
+| ReAct | Qwen3-32B | 0.350 | 0.220 | 0.180 | 0.150 | 0.140 |
+| FC | Qwen3-4B | 0.125 | 0.077 | 0.065 | 0.060 | 0.006 |
+| FC | Qwen3-8B | 0.269 | 0.157 | 0.126 | 0.110 | 0.097 |
+| FC | Qwen3-14B | 0.236 | 0.132 | 0.092 | 0.072 | 0.060 |
+| FC | Qwen3-32B | 0.331 | 0.238 | 0.190 | 0.160 | 0.122 |
 
-| Strategy       | Pass^1 | Pass^2 | Pass^3 | Pass^4 |
-| -------------- | ------ | ------ | ------ | ------ |
-| [TC (claude-3-5-sonnet-20241022)](https://www.anthropic.com/news/3-5-models-and-computer-use)      | **0.460**     | **0.326**     | **0.263**     | **0.225**     |
-| [TC (gpt-4o)](https://platform.openai.com/docs/guides/function-calling)     | 0.420     | 0.273     | 0.220     | 0.200     |
-| [TC (claude-3-5-sonnet-20240620)](https://docs.anthropic.com/en/docs/build-with-claude/tool-use)      | 0.360     | 0.224     | 0.169     | 0.139     |
-| [TC (mistral-large-2407)](https://docs.mistral.ai/capabilities/function_calling/)     | ??     | ??     | ??     | ??     |
-| [TC (gpt-4o-mini)](https://platform.openai.com/docs/guides/function-calling)     | 0.225     | 0.140     | 0.110     | 0.100     |
-| [Act](https://arxiv.org/abs/2210.03629) (gpt-4o)     | 0.365 | 0.217 | 0.160 | 0.140     |
-| [ReAct](https://arxiv.org/abs/2210.03629) (gpt-4o)     | 0.325 | 0.233 | 0.185 | 0.160     |
+### Retail Domain
 
-### Retail
+| Strategy | Model | pass^1 | pass^2 | pass^3 | pass^4 | pass^5 |
+|---|---|---|---|---|---|---|
+| ACT | Qwen3-4B | 0.104 | 0.049 | 0.035 | 0.030 | 0.026 |
+| ACT | Qwen3-8B | 0.117 | 0.070 | 0.056 | 0.048 | 0.043 |
+| ACT | Qwen3-14B | 0.292 | 0.174 | 0.119 | 0.085 | 0.061 |
+| ACT | Qwen3-32B | 0.139 | 0.081 | 0.065 | 0.057 | 0.051 |
+| ReAct | Qwen3-4B | 0.075 | 0.059 | 0.056 | 0.054 | 0.052 |
+| ReAct | Qwen3-8B | 0.070 | 0.041 | 0.033 | 0.028 | 0.025 |
+| ReAct | Qwen3-14B | 0.324 | 0.190 | 0.130 | 0.094 | 0.070 |
+| ReAct | Qwen3-32B | 0.304 | 0.177 | 0.142 | 0.124 | 0.111 |
+| FC | Qwen3-4B | 0.040 | 0.026 | 0.021 | 0.019 | 0.017 |
+| FC | Qwen3-8B | 0.270 | 0.157 | 0.126 | 0.110 | 0.098 |
+| FC | Qwen3-14B | 0.348 | 0.220 | 0.159 | 0.125 | 0.104 |
+| FC | Qwen3-32B | 0.374 | 0.218 | 0.175 | 0.152 | 0.136 |
 
-| Strategy       | Pass^1 | Pass^2 | Pass^3 | Pass^4 |
-| -------------- | ------ | ------ | ------ | ------ |
-| [TC (claude-3-5-sonnet-20241022)](https://www.anthropic.com/news/3-5-models-and-computer-use)      | **0.692**     | **0.576**     | **0.509**     | **0.462**     |
-| [TC (gpt-4o)](https://platform.openai.com/docs/guides/function-calling)     | 0.604     | 0.491     | 0.430     | 0.383     |
-| [TC (claude-3-5-sonnet-20240620)](https://docs.anthropic.com/en/docs/build-with-claude/tool-use)      | 0.626     | 0.506     | 0.435     | 0.387     |
-| [TC (mistral-large-2407)](https://docs.mistral.ai/capabilities/function_calling/)     | ??     | ??     | ??     | ??     |
-| [TC (gpt-4o-mini)](https://platform.openai.com/docs/guides/function-calling)     | ??     | ??     | ??     | ??     |
-| [Act](https://arxiv.org/abs/2210.03629) (gpt-4o)     | ??     | ??     | ??     | ??     |
-| [ReAct](https://arxiv.org/abs/2210.03629) (gpt-4o)     | ??     | ??     | ??     | ??     |
+## Phase 2 Error Analysis
 
-*TC = `tool-calling` strategy (the function-calling strategy reported in the paper)
+We classified failures into 9 categories across all model sizes and strategies:
+
+1. **Premature Escalation / Surrender** — Agent gives up before exhausting available tools
+2. **Tool Selection & Schema Errors** — Wrong tool or hallucinated function calls
+3. **Tool Argument / ID Errors** — Correct tool, wrong arguments
+4. **Authentication & Missing Info Failures** — Skipping auth or ignoring available data
+5. **Policy & Confirmation Violations** — Skipping confirmation steps or violating domain rules
+6. **Constraint & Preference Misinterpretation** — Ignoring user requirements
+7. **Incomplete Multi-Step Execution** — Starting but not finishing multi-step workflows
+8. **Looping & Inefficient Reasoning** — Repeated identical tool calls with no progress
+9. **System / Infrastructure Failures** — Context overflow, API timeouts
+
+### Qwen3-32B Error Distribution (the model used for Phase 3)
+
+**Airline:**
+
+| Error Category | ReAct (%) | ACT (%) | FC (%) |
+|---|---|---|---|
+| Premature Escalation | 42.0 | 38.0 | 20.0 |
+| Constraint Misinterpretation | 22.0 | 23.0 | 30.0 |
+| Tool Argument / ID Errors | 10.0 | 12.0 | 16.0 |
+| Policy & Confirmation | 9.0 | 11.0 | 10.0 |
+| Incomplete Multi-Step | 6.0 | 6.0 | 10.0 |
+
+**Retail:**
+
+| Error Category | ReAct (%) | ACT (%) | FC (%) |
+|---|---|---|---|
+| Looping & Inefficient Reasoning | 56.2 | 13.1 | 19.4 |
+| Tool Selection & Schema Errors | 33.8 | 2.0 | 1.4 |
+| Tool Argument / ID Errors | 6.2 | 42.4 | 6.9 |
+| Constraint Misinterpretation | 0.0 | 3.0 | 33.3 |
+| Authentication & Missing Info | 1.2 | 34.3 | 13.9 |
 
 ## Setup
 
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/sierra-research/tau-bench && cd ./tau-bench
+git clone https://github.com/Samudyata/tau-bench-multi-agent-approach.git
+cd tau-bench-multi-agent-approach
 ```
 
-2. Install from source (which also installs required packages):
+2. Install from source:
 
 ```bash
 pip install -e .
 ```
 
-3. Set up your OpenAI / Anthropic / Google / Mistral / AnyScale API keys as environment variables.
+3. Start a vLLM server for the agent model:
 
 ```bash
-OPENAI_API_KEY=...
-ANTHROPIC_API_KEY=...
-GOOGLE_API_KEY=...
-MISTRAL_API_KEY=...
+vllm serve Qwen/Qwen3-32B --port 8005
 ```
 
-## Run
-
-Run a tool-calling agent on the τ-retail environment:
+4. Set your API key for the user simulator:
 
 ```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --user-model gpt-4o --user-model-provider openai --user-strategy llm --max-concurrency 10
+export OPENAI_API_KEY=...
 ```
 
-Set max concurrency according to your API limit(s).
+## Usage
 
-To run specific tasks, use the `--task-ids` flag. For example:
+### Run individual strategies
 
 ```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --user-model gpt-4o --user-model-provider openai --user-strategy llm --max-concurrency 10 --task-ids 2 4 6
+# Baseline tool-calling
+python run.py --agent-strategy tool-calling --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
+
+# ReAct + Reflection (new)
+python run.py --agent-strategy react-reflection --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
+
+# Adaptive Budget Forcing
+python run.py --agent-strategy abf --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
 ```
 
-This command will run only the tasks with IDs 2, 4, and 6.
-
-## User simulators
-
-By default, we use `gpt-4o` as the user simulator with strategy `llm`. You can use other models by setting the `--user-model` flag, or other strategies by setting the `--user-strategy` flag. For example, run a tool-calling agent with a claude user simulator:
+### Run HA-TTS (auto-routes by difficulty)
 
 ```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --max-concurrency 10 --user-model claude-3-5-sonnet-20240620 --user-model-provider anthropic --user-strategy llm
+python run.py --agent-strategy ha-tts --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
 ```
 
-Other strategies:
-
-To run `react` user simulator:
+### Run specific tasks
 
 ```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --max-concurrency 10 --user-model gpt-4o --user-model-provider openai --user-strategy react
+python run.py --agent-strategy react-reflection --env retail --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --task-ids 0 5 10 15 20
 ```
 
-Example of a `react` user response:
+## Project Structure
 
-```md
-Thought:
-I should provide my name and zip code as I wasn't given an email address to use.
+```
+tau_bench/agents/
+├── base.py                      # Abstract Agent base class
+├── prompts.py                   # Shared ENHANCED_GUIDELINES & REFLECTION_PROMPT
+├── difficulty.py                # Difficulty estimator (LLM-based + keyword fallback)
+├── tool_calling_agent.py        # Baseline: native function calling + loop detector
+├── chat_react_agent.py          # ReAct/ACT agent + loop detector
+├── adaptive_budget_agent.py     # ABF agent + loop detector
+├── react_reflection_agent.py    # ReAct + Reflection agent (NEW)
+├── meta_controller_agent.py     # HA-TTS meta-controller
+└── few_shot_agent.py            # Few-shot in-context learning agent
 
-User Response:
-Sure, my name is Yusuf Rossi, and my zip code is 19122.
+tau_bench/envs/
+├── airline/                     # Airline domain (14 tools, ~61 tasks)
+├── retail/                      # Retail domain (16 tools, ~100+ tasks)
+├── base.py                      # Environment logic + SHA-256 evaluation
+└── user.py                      # User simulator (5 strategies)
 ```
 
-To run `verify` user simulator:
+## Team
 
-```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --max-concurrency 10 --user-model gpt-4o --user-model-provider openai --user-strategy verify
-```
+Gursparsh Singh Sodhi, Hithaishi Surendra, Jahnvi Seth, Samhitha Harish, Samudyata Sudarshan Jagirdar
 
-This strategy uses a subsequent LLM verification step to check if the user simulator's response is satisfactory. If not, the user simulator will be prompted to generate a new response.
+## Acknowledgments
 
-To run `reflection` user simulator:
-
-```bash
-python run.py --agent-strategy tool-calling --env retail --model gpt-4o --model-provider openai --max-concurrency 10 --user-model gpt-4o --user-model-provider openai --user-strategy reflection
-```
-
-This strategy uses a subsequent LLM verification step to check if the user simulator's response is satisfactory. If not, the user simulator will be prompted to reflect on its response and generate a new response.
-
-## Auto error identification
-
-Often times, it is difficult and time consuming to manually identify specific error locations in trajectories as they can be long and the constraints can be complex. We have provided an auto error identification tool that can do the following:
-
-1. Fault assignment: determine the entity that is responsible for the fault (user, agent, environment)
-2. Fault type classification: classify the type of fault (goal_partially_completed, used_wrong_tool, used_wrong_tool_argument, took_unintended_action)
-
-Both of the labels are accompanied with a description.
-
-To run the auto error identification, run:
-
-```bash
-python auto_error_identification.py --env <airline/retail> --platform openai --results-path <the path to your results file here> --max-concurrency 16 --output-path test-auto-error-identification --max-num-failed-results 10
-```
-
-Please note that this feature utilizes an LLM, which may lead to inaccurate error identifications.
-
-*Notice: If an error is raised due to the structure of your results file, you may have to rerun the benchmark to produce a new results file. We have recently [rewritten](https://github.com/sierra-research/tau-bench/commit/043b544371757ebb3762b3d02a6675dfe0c41798) the benchmark to be more type-safe and extensible.
-
-## Historical trajectories
-
-τ-bench might be expensive to run. We have provided a set of historical trajectories for the airline and retail environments in `./historical_trajectories`.
-
-If you would like to contribute your historical trajectories to this benchmark, please submit a PR!
-
-## License
-
-See `./LICENSE`.
-
-## Contact
-
-Please submit issues or pull requests if you find problems with the benchmark.
-
-## Citation
+Built on [τ-bench](https://github.com/sierra-research/tau-bench) by Sierra Research.
 
 ```bibtex
 @misc{yao2024tau,
-      title={$\tau$-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains}, 
+      title={$\tau$-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains},
       author={Shunyu Yao and Noah Shinn and Pedram Razavi and Karthik Narasimhan},
       year={2024},
       eprint={2406.12045},
       archivePrefix={arXiv},
       primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2406.12045}, 
-}
-@misc{barres2025tau2,
-      title={$\tau^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment}, 
-      author={Victor Barres and Honghua Dong and Soham Ray and Xujie Si and Karthik Narasimhan},
-      year={2025},
-      eprint={2506.07982},
-      archivePrefix={arXiv},
-      primaryClass={cs.AI},
-      url={https://arxiv.org/abs/2506.07982}, 
+      url={https://arxiv.org/abs/2406.12045},
 }
 ```
