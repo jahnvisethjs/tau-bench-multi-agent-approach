@@ -11,7 +11,7 @@
 #   Add your own tier dict below (e.g. BEAM_TIERS) and import it in your agent file.
 
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # ── Difficulty tier type ───────────────────────────────────────────────────────
 # One of these four strings — used consistently across all agents and MetaController
@@ -33,7 +33,8 @@ POLICY_KEYWORDS = [
 ]
 
 MODIFICATION_TYPES = [
-    "cancel",
+    # NOTE: "cancel" removed — already in POLICY_KEYWORDS with higher weight (+2).
+    # Having it in both lists inflated difficulty scores for simple cancellations.
     "modify",
     "change",
     "update",
@@ -76,14 +77,28 @@ ABF_BUDGET_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
     },
 }
 
-# Person 2 (Beam-PG): add BEAM_TIERS here when ready
-# BEAM_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
+# ReactReflection agent tier config
+REFLECTION_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "easy": {
+        "reflection_interval": 8,
+        "description": "Infrequent reflection — simple tasks rarely need it",
+    },
+    "medium": {
+        "reflection_interval": 5,
+        "description": "Moderate reflection frequency",
+    },
+    "hard": {
+        "reflection_interval": 4,
+        "description": "Frequent reflection — complex tasks need regular checkpoints",
+    },
+    "very_hard": {
+        "reflection_interval": 3,
+        "description": "Very frequent reflection — maximum self-monitoring",
+    },
+}
 
-# Person 3 (Refine-CA): add REFINE_TIERS here when ready
-# REFINE_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
-
-# Person 4 (MCTS-RE): add MCTS_TIERS here when ready
-# MCTS_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
+# Person 4 (very_hard agent): add your tier config here when ready
+# VERY_HARD_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
 
 
 # ── Single shared estimator ────────────────────────────────────────────────────
@@ -134,6 +149,61 @@ class DifficultyEstimator:
             return "hard"
         else:
             return "very_hard"
+
+    def estimate_with_llm(
+        self,
+        instruction: str,
+        model: str,
+        base_url: str = "http://localhost:8005/v1",
+    ) -> DifficultyTier:
+        """
+        LLM-based difficulty estimation. Uses a single short LLM call
+        to classify task difficulty more accurately than keyword heuristics.
+
+        Falls back to keyword-based estimate() on any failure.
+
+        Args:
+            instruction: the task instruction text
+            model: vLLM model name/path
+            base_url: vLLM endpoint URL
+        """
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(base_url=base_url, api_key="EMPTY")
+            prompt = (
+                "Rate the difficulty of this customer service task. Consider:\n"
+                "- How many tool calls are needed?\n"
+                "- Are there complex policy rules involved (cancellation eligibility, "
+                "payment constraints, refund conditions)?\n"
+                "- Does the user have conflicting or ambiguous requirements?\n"
+                "- Are there multi-step dependencies (search -> select -> book -> confirm)?\n\n"
+                "Difficulty levels:\n"
+                "1 = EASY: Simple lookup or single action (check status, get details)\n"
+                "2 = MEDIUM: Standard 2-3 step task (simple booking, basic return)\n"
+                "3 = HARD: Multi-step with policy constraints (cancel with conditions, "
+                "multi-item exchange, split payments)\n"
+                "4 = VERY_HARD: Complex multi-step with conflicting constraints, "
+                "multiple policy checks, or ambiguous user intent\n\n"
+                f'Task: "{instruction[:500]}"\n\n'
+                "Reply with ONLY the number (1, 2, 3, or 4):"
+            )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=5,
+                temperature=0.0,
+            )
+            text = response.choices[0].message.content.strip()
+            match = re.search(r"[1-4]", text)
+            if match:
+                tier_map = {1: "easy", 2: "medium", 3: "hard", 4: "very_hard"}
+                return tier_map[int(match.group())]
+        except Exception as e:
+            print(f"[DifficultyEstimator] LLM estimation failed ({e}), using keyword fallback")
+
+        # Fallback to keyword-based estimation
+        return self.estimate(instruction)
 
     def _estimate_action_count(self, instruction: str) -> int:
         """Rough heuristic: count numeric/plural words that imply many actions."""
