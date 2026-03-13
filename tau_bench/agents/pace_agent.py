@@ -64,6 +64,8 @@ class PaceAgent(Agent):
             model=self.model,
             custom_llm_provider=self.provider,
             messages=full_messages,
+            api_base="http://localhost:8001/v1",   # 32B port
+            api_key="EMPTY",
             temperature=self.temperature,
         )
         message = res.choices[0].message

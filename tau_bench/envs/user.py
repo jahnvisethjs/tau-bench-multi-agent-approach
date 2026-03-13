@@ -4,6 +4,7 @@ import abc
 import enum
 import os
 from litellm import completion
+from dotenv import load_dotenv
 
 from typing import Optional, List, Dict, Any, Union
 
@@ -121,10 +122,13 @@ User Response:
 
     def generate_next_message(self, messages: List[Dict[str, Any]]) -> str:
         api_base = os.getenv('USER_MODEL_API_BASE', None)
+        load_dotenv()
         res = completion(
             model=self.model,
             custom_llm_provider=self.provider,
             messages=messages,
+            api_base="https://openai.rc.asu.edu/v1",   # your 32B port
+            api_key=os.getenv("VOY_KEY"),
             api_base=api_base,
         )
         message = res.choices[0].message
