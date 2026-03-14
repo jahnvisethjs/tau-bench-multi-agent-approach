@@ -76,6 +76,26 @@ ABF_BUDGET_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
     },
 }
 
+# Best-of-N: maps difficulty → number of trajectories to sample
+BON_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "easy": {
+        "n": 2,
+        "description": "Two trajectories — simple tasks rarely need more",
+    },
+    "medium": {
+        "n": 3,
+        "description": "Three trajectories — moderate tasks benefit from a few samples",
+    },
+    "hard": {
+        "n": 4,
+        "description": "Four trajectories — policy-constrained tasks need more attempts",
+    },
+    "very_hard": {
+        "n": 5,
+        "description": "Five trajectories — complex multi-step tasks get maximum coverage",
+    },
+}
+
 # Person 2 (Beam-PG): add BEAM_TIERS here when ready
 # BEAM_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
 
