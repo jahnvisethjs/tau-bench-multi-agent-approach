@@ -5,23 +5,20 @@
 # The MetaControllerAgent is a wrapper agent that:
 #   1. Reads the task instruction (without touching the env/user simulator)
 #   2. Estimates difficulty using the shared DifficultyEstimator (LLM-based or keyword fallback)
-#   3. Routes to the appropriate TTS sub-agent based on difficulty
+#   3. Routes to the appropriate TTS sub-agent based on 5 difficulty tiers
 #
-# Routing table:
-#   easy      -> baseline ToolCallingAgent          (1x cost)
-#   medium    -> Adaptive Budget Forcing agent      (~1.5-2x cost)
-#   hard      -> ReactReflection agent              (~1.2-1.5x cost)
-#   very_hard -> [stub -> falls back to ABF]        (teammate will implement)
-#
-# TEAM INTEGRATION:
-#   Person 4 (very_hard): replace the stub import below with your agent.
+# Routing table (5-tier):
+#   very_easy -> ABF (minimal budget)             (~0% overhead)
+#   easy      -> PolicyGuard (policy critic)       (~10-20% overhead)
+#   medium    -> PACE (constraint register)        (~20-30% overhead)
+#   hard      -> ReactReflection (periodic review) (~30-50% overhead)
+#   very_hard -> Best-of-N (N=2, retry)           (~2x cost)
 
 from typing import List, Dict, Any, Optional
 
 from tau_bench.agents.base import Agent
 from tau_bench.agents.difficulty import DifficultyEstimator, DifficultyTier
 from tau_bench.agents.tool_calling_agent import ToolCallingAgent
-from tau_bench.agents.chat_react_agent import ChatReActAgent
 from tau_bench.envs.base import Env
 from tau_bench.types import SolveResult
 
@@ -35,16 +32,28 @@ except ImportError:
     _ABF_AVAILABLE = False
 
 try:
+    from tau_bench.agents.policy_guard_agent import PolicyGuardAgent
+    _POLICY_GUARD_AVAILABLE = True
+except ImportError:
+    _POLICY_GUARD_AVAILABLE = False
+
+try:
+    from tau_bench.agents.pace_agent import PaceAgent
+    _PACE_AVAILABLE = True
+except ImportError:
+    _PACE_AVAILABLE = False
+
+try:
     from tau_bench.agents.react_reflection_agent import ReactReflectionAgent
     _REFLECTION_AVAILABLE = True
 except ImportError:
     _REFLECTION_AVAILABLE = False
 
-# Stub for very_hard tier — teammate will implement
-# Replace this block with your agent import when ready:
-#   from tau_bench.agents.your_agent import YourVeryHardAgent
-#   _VERY_HARD_AVAILABLE = True
-_VERY_HARD_AVAILABLE = False
+try:
+    from tau_bench.agents.best_of_n_agent import BestOfNAgent
+    _BON_AVAILABLE = True
+except ImportError:
+    _BON_AVAILABLE = False
 
 
 # ── MetaControllerAgent ────────────────────────────────────────────────────────
@@ -56,11 +65,12 @@ class MetaControllerAgent(Agent):
     Estimates task difficulty from the instruction and routes each task
     to the cheapest TTS strategy that can handle it reliably.
 
-    Routing:
-        easy      -> ToolCallingAgent (baseline, 1x cost)
-        medium    -> AdaptiveBudgetForcingAgent (~1.5-2x cost)
-        hard      -> ReactReflectionAgent (~1.2-1.5x cost)
-        very_hard -> [stub, falls back to ABF] (teammate will implement)
+    5-Tier Routing:
+        very_easy -> ABF (minimal budget, ~0% overhead)
+        easy      -> PolicyGuard (policy critic, ~10-20% overhead)
+        medium    -> PACE (constraint register, ~20-30% overhead)
+        hard      -> ReactReflection (periodic review, ~30-50% overhead)
+        very_hard -> Best-of-N (N=2 retry, ~2x cost)
     """
 
     def __init__(
@@ -80,18 +90,9 @@ class MetaControllerAgent(Agent):
         # Shared difficulty estimator
         self.estimator = DifficultyEstimator()
 
-        # ── easy: baseline ToolCallingAgent ───────────────────────────────────
-        self.baseline_agent = ToolCallingAgent(
-            tools_info=tools_info,
-            wiki=wiki,
-            model=model,
-            provider=provider,
-            temperature=temperature,
-        )
-
-        # ── medium: ABF agent ────────────────────────────────────────────────
+        # ── very_easy: ABF with minimal budget ─────────────────────────────
         if _ABF_AVAILABLE:
-            self.abf_agent = AdaptiveBudgetForcingAgent(
+            self.very_easy_agent = AdaptiveBudgetForcingAgent(
                 tools_info=tools_info,
                 wiki=wiki,
                 model=model,
@@ -99,16 +100,40 @@ class MetaControllerAgent(Agent):
                 temperature=temperature,
             )
         else:
-            self.abf_agent = ChatReActAgent(
+            self.very_easy_agent = ToolCallingAgent(
                 tools_info=tools_info,
                 wiki=wiki,
                 model=model,
                 provider=provider,
-                use_reasoning=True,
                 temperature=temperature,
             )
 
-        # ── hard: ReactReflection agent ──────────────────────────────────────
+        # ── easy: PolicyGuard agent ────────────────────────────────────────
+        if _POLICY_GUARD_AVAILABLE:
+            self.easy_agent = PolicyGuardAgent(
+                tools_info=tools_info,
+                wiki=wiki,
+                model=model,
+                provider=provider,
+                temperature=temperature,
+                max_retries=2,
+            )
+        else:
+            self.easy_agent = self.very_easy_agent  # fallback
+
+        # ── medium: PACE agent ─────────────────────────────────────────────
+        if _PACE_AVAILABLE:
+            self.medium_agent = PaceAgent(
+                tools_info=tools_info,
+                wiki=wiki,
+                model=model,
+                provider=provider,
+                temperature=temperature,
+            )
+        else:
+            self.medium_agent = self.very_easy_agent  # fallback
+
+        # ── hard: ReactReflection agent ────────────────────────────────────
         if _REFLECTION_AVAILABLE:
             self.hard_agent = ReactReflectionAgent(
                 tools_info=tools_info,
@@ -116,16 +141,24 @@ class MetaControllerAgent(Agent):
                 model=model,
                 provider=provider,
                 temperature=temperature,
-                reflection_interval=4,  # reflect every 4 tool calls
+                reflection_interval=4,
             )
         else:
-            # Fallback to ABF if reflection agent not available
-            self.hard_agent = self.abf_agent
+            self.hard_agent = self.very_easy_agent  # fallback
 
-        # ── very_hard: stub (teammate will implement) ────────────────────────
-        # When your agent is ready, replace this with:
-        #   self.very_hard_agent = YourVeryHardAgent(tools_info, wiki, model, ...)
-        self.very_hard_agent = self.abf_agent  # Temporary fallback
+        # ── very_hard: Best-of-N agent (N=2) ──────────────────────────────
+        if _BON_AVAILABLE:
+            self.very_hard_agent = BestOfNAgent(
+                tools_info=tools_info,
+                wiki=wiki,
+                model=model,
+                provider=provider,
+                temperature=temperature,
+                max_n=2,
+                difficulty_override="very_hard",
+            )
+        else:
+            self.very_hard_agent = self.hard_agent  # fallback
 
     # ── solve ──────────────────────────────────────────────────────────────────
 
@@ -159,14 +192,15 @@ class MetaControllerAgent(Agent):
         self._log_routing(task_index, difficulty, instruction)
 
         # ── Step 3: Route to the right sub-agent ────────────────────────────
-        if difficulty == "easy":
-            return self.baseline_agent.solve(env, task_index, max_num_steps)
-        elif difficulty == "medium":
-            return self.abf_agent.solve(env, task_index, max_num_steps)
-        elif difficulty == "hard":
-            return self.hard_agent.solve(env, task_index, max_num_steps)
-        else:  # very_hard
-            return self.very_hard_agent.solve(env, task_index, max_num_steps)
+        routing = {
+            "very_easy": self.very_easy_agent,
+            "easy": self.easy_agent,
+            "medium": self.medium_agent,
+            "hard": self.hard_agent,
+            "very_hard": self.very_hard_agent,
+        }
+        agent = routing.get(difficulty, self.very_easy_agent)
+        return agent.solve(env, task_index, max_num_steps)
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -178,28 +212,32 @@ class MetaControllerAgent(Agent):
     ) -> None:
         """Print a compact routing summary for each task."""
         strategy_map = {
+            "very_easy": (
+                "ABF (minimal)" if _ABF_AVAILABLE else "ToolCalling (fallback)",
+                "~0%",
+            ),
             "easy": (
-                "baseline (ToolCalling)",
-                "1x",
+                "PolicyGuard" if _POLICY_GUARD_AVAILABLE else "ABF (fallback)",
+                "~10-20%",
             ),
             "medium": (
-                "AdaptiveBudgetForcing" if _ABF_AVAILABLE else "ABF-stub (ReAct)",
-                "~1.5-2x",
+                "PACE" if _PACE_AVAILABLE else "ABF (fallback)",
+                "~20-30%",
             ),
             "hard": (
-                "ReactReflection" if _REFLECTION_AVAILABLE else "reflection-stub (ABF fallback)",
-                "~1.2-1.5x",
+                "ReactReflection" if _REFLECTION_AVAILABLE else "ABF (fallback)",
+                "~30-50%",
             ),
             "very_hard": (
-                "very_hard-stub (ABF fallback)" if not _VERY_HARD_AVAILABLE else "VeryHardAgent",
-                "~2-3x" if not _VERY_HARD_AVAILABLE else "custom",
+                "BestOfN (N=2)" if _BON_AVAILABLE else "ReactReflection (fallback)",
+                "~2x",
             ),
         }
-        strategy_name, cost = strategy_map[difficulty]
+        strategy_name, cost = strategy_map.get(difficulty, ("unknown", "?"))
         preview = instruction[:72] + "..." if len(instruction) > 72 else instruction
 
         print(
             f"\n[MetaController] task={task_index} | difficulty={difficulty} | "
-            f"strategy={strategy_name} | cost={cost}"
+            f"strategy={strategy_name} | overhead={cost}"
         )
         print(f'[MetaController] instruction: "{preview}"')
