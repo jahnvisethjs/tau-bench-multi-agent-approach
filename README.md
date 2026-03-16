@@ -1,56 +1,79 @@
 # Enhancing Agent Reliability on τ-bench via Multi-Agent Test-Time Scaling
 
-A multi-agent framework that improves LLM tool-calling agent performance on [τ-bench](https://arxiv.org/abs/2406.12045) through adaptive test-time scaling strategies, loop detection, enhanced prompting, and periodic self-reflection.
+A multi-agent framework that improves LLM tool-calling agent performance on [τ-bench](https://arxiv.org/abs/2406.12045) through a unified 5-tier adaptive test-time scaling meta-controller. Implements five specialized agent strategies — ABF, Policy Guard, PACE, React Reflection, and Best-of-N — routed by LLM-estimated task difficulty.
 
 Built on top of [Sierra's τ-bench benchmark](https://github.com/sierra-research/tau-bench) for the CSE578 Agentic AI course.
 
 ## Architecture
 
 ```
-                    ┌──────────────────────┐
-                    │   MetaController     │
-                    │  (HA-TTS Router)     │
-                    │                      │
-                    │  LLM-based Difficulty │
-                    │     Estimator        │
-                    └──────┬───────────────┘
-                           │
-            ┌──────────────┼──────────────┬──────────────┐
-            │              │              │              │
-         easy           medium          hard        very_hard
-            │              │              │              │
-   ┌────────▼───┐  ┌───────▼──────┐ ┌────▼────────┐ ┌──▼───────┐
-   │ToolCalling │  │    ABF       │ │   ReAct +   │ │  Stub    │
-   │  Agent     │  │   Agent      │ │ Reflection  │ │(fallback)│
-   │  (1x)      │  │ (~1.5-2x)   │ │ (~1.2-1.5x) │ │          │
-   └────────────┘  └──────────────┘ └─────────────┘ └──────────┘
-         │              │              │              │
-         └──────────────┴──────────────┴──────────────┘
-                           │
-                  All agents include:
-                  • Loop Detector
-                  • Enhanced System Prompts
+                     ┌────────────────────────┐
+                     │    MetaController      │
+                     │   (HA-TTS Router)      │
+                     │                        │
+                     │  LLM-based Difficulty   │
+                     │     Estimator          │
+                     └──────────┬─────────────┘
+                                │
+       ┌────────────┬───────────┼───────────┬────────────┐
+       │            │           │           │            │
+   very_easy      easy       medium       hard      very_hard
+    (0-1)         (2)        (3-4)       (5-6)       (7+)
+       │            │           │           │            │
+  ┌────▼────┐ ┌─────▼─────┐ ┌──▼───┐ ┌────▼────────┐ ┌──▼────────┐
+  │  ABF    │ │  Policy   │ │ PACE │ │   ReAct +   │ │ Best-of-N │
+  │ (min    │ │  Guard    │ │      │ │ Reflection  │ │  (N=2)    │
+  │ budget) │ │           │ │      │ │             │ │           │
+  │  ~0%    │ │ ~10-20%   │ │~20-30│ │  ~30-50%    │ │   ~2×     │
+  └─────────┘ └───────────┘ └──────┘ └─────────────┘ └───────────┘
+       │            │           │           │            │
+       └────────────┴───────────┴───────────┴────────────┘
+                                │
+                       All agents include:
+                       • Loop Detector
+                       • Enhanced System Prompts
 ```
 
 ## Strategies
 
+### Baseline Agents
 | Strategy | CLI Flag | Description | Extra Cost |
 |---|---|---|---|
-| Tool Calling | `tool-calling` | Baseline native function calling via LiteLLM | 1x |
-| ReAct | `react` | Text-based reasoning (Thought → Action) | 1x |
-| ACT | `act` | Action-only, no explicit reasoning | 1x |
-| ABF | `abf` | Adaptive Budget Forcing — S1-style "Wait," reconsideration scaled by difficulty | ~1.5-2x |
-| ReAct + Reflection | `react-reflection` | ReAct with periodic reflection checkpoints every N tool calls | ~1.2-1.5x |
-| HA-TTS | `ha-tts` | Meta-controller that routes tasks to the best strategy based on LLM-estimated difficulty | Adaptive |
+| Tool Calling | `tool-calling` | Baseline native function calling via LiteLLM | 1× |
+| ReAct | `react` | Text-based reasoning (Thought → Action) | 1× |
+| ACT | `act` | Action-only, no explicit reasoning | 1× |
+
+### Phase 3 Agents (New)
+| Strategy | CLI Flag | Description | Extra Cost |
+|---|---|---|---|
+| ABF | `abf` | Adaptive Budget Forcing — S1-style "Wait," reconsideration scaled by difficulty | ~1.5-2× |
+| Policy Guard | `policy-guard` | Pre-action policy critic — validates responses against domain policies before execution | ~10-20% |
+| PACE | `pace` | Constraint register + pre-action validation — tracks all user requirements systematically | ~20-30% |
+| ReAct + Reflection | `react-reflection` | ReAct with periodic reflection checkpoints every N tool calls + loop detection | ~30-50% |
+| Best-of-N | `best-of-n` | Multiple full trajectory attempts (N=2), picks best result | ~2× |
+| HA-TTS | `ha-tts` | 5-tier meta-controller that routes tasks by LLM-estimated difficulty | Adaptive |
 
 ## Key Improvements Over Baseline τ-bench
 
 | Feature | What It Does | Targets |
 |---|---|---|
-| **Loop Detector** | Detects repeated identical tool calls. Warning at 2x, force-break at 3x. Applied to all agents. | Looping & Inefficient Reasoning (up to 56% of errors) |
+| **Loop Detector** | Detects repeated identical tool calls. Warning at 2×, force-break at 3×. Applied to all agents. | Looping & Inefficient Reasoning (up to 56% of errors) |
 | **Enhanced System Prompts** | Behavioral guardrails injected into all agents: anti-escalation, auth-first, constraint tracking, multi-step completion enforcement | Premature Escalation (up to 42%), Auth failures (up to 34%) |
+| **Policy Guard** | Lightweight critic validates agent responses against domain policies before execution. Catches surrender phrases and policy violations. | Premature Escalation, Policy & Confirmation violations |
+| **PACE** | Constraint register extracts all user requirements upfront, validates each action against the register before execution. | Constraint Misinterpretation (up to 33%), Incomplete Multi-Step |
 | **ReactReflectionAgent** | Every 4 tool calls, forces the agent to review progress, check constraints, and plan remaining steps | All error categories simultaneously |
-| **LLM Difficulty Estimator** | Replaces keyword-only heuristics with an LLM classification call (falls back to keywords on failure) | Better routing accuracy for HA-TTS |
+| **Best-of-N** | Runs N=2 full trajectories for the hardest tasks, picks best. Reserved for very_hard tier only. | All categories (brute-force retry) |
+| **LLM Difficulty Estimator** | 5-level LLM classification (falls back to keyword scoring). Routes tasks to optimal strategy. | Better routing accuracy for HA-TTS |
+
+## 5-Tier Routing Logic
+
+| Tier | Difficulty Score | Strategy | Rationale |
+|---|---|---|---|
+| very_easy | 0-1 | ABF (minimal budget) | Simple lookups — minimal overhead |
+| easy | 2 | Policy Guard | Single-step modifications — policy check catches common errors cheaply |
+| medium | 3-4 | PACE | Multi-constraint tasks — register tracks all requirements |
+| hard | 5-6 | React Reflection | Complex multi-step — reflection catches drift, loop detector prevents spinning |
+| very_hard | 7+ | Best-of-N (N=2) | Most complex — when single attempts frequently fail |
 
 ## Phase 1 Results (Baselines)
 
@@ -131,8 +154,8 @@ We classified failures into 9 categories across all model sizes and strategies:
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/Samudyata/tau-bench-multi-agent-approach.git
-cd tau-bench-multi-agent-approach
+git clone https://github.com/Samudyata/Multi-Agent-Framework-TauBench.git
+cd Multi-Agent-Framework-TauBench
 ```
 
 2. Install from source:
@@ -163,18 +186,28 @@ python run.py --agent-strategy tool-calling --env airline --model Qwen/Qwen3-32B
   --model-provider openai --user-model gpt-4o --user-model-provider openai \
   --user-strategy llm --num-trials 5
 
-# ReAct + Reflection (new)
+# Policy Guard
+python run.py --agent-strategy policy-guard --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
+
+# PACE (constraint tracking)
+python run.py --agent-strategy pace --env airline --model Qwen/Qwen3-32B \
+  --model-provider openai --user-model gpt-4o --user-model-provider openai \
+  --user-strategy llm --num-trials 5
+
+# ReAct + Reflection
 python run.py --agent-strategy react-reflection --env airline --model Qwen/Qwen3-32B \
   --model-provider openai --user-model gpt-4o --user-model-provider openai \
   --user-strategy llm --num-trials 5
 
-# Adaptive Budget Forcing
-python run.py --agent-strategy abf --env airline --model Qwen/Qwen3-32B \
+# Best-of-N (N=2)
+python run.py --agent-strategy best-of-n --env airline --model Qwen/Qwen3-32B \
   --model-provider openai --user-model gpt-4o --user-model-provider openai \
   --user-strategy llm --num-trials 5
 ```
 
-### Run HA-TTS (auto-routes by difficulty)
+### Run HA-TTS (5-tier meta-controller, auto-routes by difficulty)
 
 ```bash
 python run.py --agent-strategy ha-tts --env airline --model Qwen/Qwen3-32B \
@@ -185,7 +218,7 @@ python run.py --agent-strategy ha-tts --env airline --model Qwen/Qwen3-32B \
 ### Run specific tasks
 
 ```bash
-python run.py --agent-strategy react-reflection --env retail --model Qwen/Qwen3-32B \
+python run.py --agent-strategy ha-tts --env retail --model Qwen/Qwen3-32B \
   --model-provider openai --user-model gpt-4o --user-model-provider openai \
   --user-strategy llm --task-ids 0 5 10 15 20
 ```
@@ -196,13 +229,23 @@ python run.py --agent-strategy react-reflection --env retail --model Qwen/Qwen3-
 tau_bench/agents/
 ├── base.py                      # Abstract Agent base class
 ├── prompts.py                   # Shared ENHANCED_GUIDELINES & REFLECTION_PROMPT
-├── difficulty.py                # Difficulty estimator (LLM-based + keyword fallback)
+├── difficulty.py                # 5-tier difficulty estimator (LLM + keyword fallback)
+├── meta_controller_agent.py     # HA-TTS 5-tier meta-controller
+│
 ├── tool_calling_agent.py        # Baseline: native function calling + loop detector
 ├── chat_react_agent.py          # ReAct/ACT agent + loop detector
-├── adaptive_budget_agent.py     # ABF agent + loop detector
-├── react_reflection_agent.py    # ReAct + Reflection agent (NEW)
-├── meta_controller_agent.py     # HA-TTS meta-controller
-└── few_shot_agent.py            # Few-shot in-context learning agent
+├── few_shot_agent.py            # Few-shot in-context learning agent
+│
+├── adaptive_budget_agent.py     # ABF agent + loop detector (very_easy tier)
+├── policy_guard_agent.py        # Policy Guard agent (easy tier)
+├── pace_agent.py                # PACE orchestrator (medium tier)
+├── pace/                        # PACE internals
+│   ├── register.py              #   Constraint register
+│   ├── executor.py              #   Pre-action validator
+│   ├── prompts.py               #   PACE-specific prompts
+│   └── tools.py                 #   PACE tool wrappers
+├── react_reflection_agent.py    # ReAct + Reflection agent (hard tier)
+└── best_of_n_agent.py           # Best-of-N agent (very_hard tier)
 
 tau_bench/envs/
 ├── airline/                     # Airline domain (14 tools, ~61 tasks)
