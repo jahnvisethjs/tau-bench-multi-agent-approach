@@ -41,6 +41,7 @@ def parse_args() -> RunConfig:
         type=str,
         default="tool-calling",
         choices=["tool-calling", "act", "react", "few-shot", "ha-tts", "abf", "bon"],
+        choices=["tool-calling", "act", "react", "few-shot", "ha-tts", "abf", "react-reflection", "pace", "policy-guard", "best-of-n"],
     )
     parser.add_argument(
         "--temperature",

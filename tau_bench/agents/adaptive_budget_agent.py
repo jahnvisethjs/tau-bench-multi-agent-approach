@@ -30,6 +30,7 @@ from openai import OpenAI
 
 from tau_bench.agents.base import Agent
 from tau_bench.agents.difficulty import DifficultyEstimator, ABF_BUDGET_TIERS, DifficultyTier
+from tau_bench.agents.prompts import ENHANCED_GUIDELINES
 from tau_bench.envs.base import Env
 from tau_bench.types import (
     Action,
@@ -79,6 +80,7 @@ class AdaptiveBudgetForcingAgent(Agent):
         instruction = REACT_INSTRUCTION if use_reasoning else ACT_INSTRUCTION
         self.prompt = (
             wiki + "\n#Available tools\n" + json.dumps(tools_info) + instruction
+            + "\n" + ENHANCED_GUIDELINES
         )
 
         # vLLM via OpenAI-compatible API (same as original)
@@ -272,7 +274,7 @@ class AdaptiveBudgetForcingAgent(Agent):
         print(f"\n[ABF] task={task_index} | difficulty={difficulty} | "
               f"num_ignore={self.num_ignore} | max_tokens={self.max_tokens_thinking}")
 
-        # ── Step 3: Standard conversation loop (unchanged from S1 base) ────────
+        # ── Step 3: Standard conversation loop with loop detection ────────────
         response = env.reset(task_index=task_index)
         reward   = 0.0
         messages: List[Dict[str, Any]] = [
@@ -281,9 +283,43 @@ class AdaptiveBudgetForcingAgent(Agent):
         ]
         total_cost = 0.0
         info       = {}
+        recent_actions = []  # Loop detection
 
         for _ in range(max_num_steps):
             message, action, cost = self.generate_next_step_with_budget_forcing(messages)
+
+            # --- Loop detection ---
+            if action.name != RESPOND_ACTION_NAME:
+                action_key = (action.name, json.dumps(action.kwargs, sort_keys=True))
+                recent_actions.append(action_key)
+                repeat_count = recent_actions.count(action_key)
+
+                if repeat_count >= 3:
+                    print(f"[LoopDetector] Forced break: {action.name} repeated 3x")
+                    action = Action(
+                        name=RESPOND_ACTION_NAME,
+                        kwargs={"content": "Let me try a different approach to assist you."},
+                    )
+                    message = {"role": "assistant", "content": "Action:\n" + json.dumps(
+                        {"name": action.name, "arguments": action.kwargs}
+                    )}
+                elif repeat_count >= 2:
+                    print(f"[LoopDetector] Warning: {action.name} repeated 2x")
+                    messages.append(message)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[SYSTEM] You have already called {action.name} with these exact "
+                            f"arguments and received the same result. Do NOT repeat this call. "
+                            f"Try different arguments, use a different tool, or respond to the user."
+                        ),
+                    })
+                    continue
+
+                if len(recent_actions) > 10:
+                    recent_actions = recent_actions[-10:]
+            # --- End loop detection ---
+
             response = env.step(action)
             obs      = response.observation
             reward   = response.reward

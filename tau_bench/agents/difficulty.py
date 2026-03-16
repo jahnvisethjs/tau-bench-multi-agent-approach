@@ -1,23 +1,22 @@
 # tau_bench/agents/difficulty.py
 #
 # Shared source of truth for difficulty estimation across ALL agents.
-# Every agent (ABF, Beam-PG, Refine-CA, MCTS-RE, MetaController)
+# Every agent (ABF, PolicyGuard, PACE, ReactReflection, BestOfN, MetaController)
 # imports from here — no one duplicates this logic.
 #
 # HOW TO USE:
 #   from tau_bench.agents.difficulty import DifficultyEstimator, ABF_BUDGET_TIERS
 #
-# HOW TO EXTEND (for other team members):
-#   Add your own tier dict below (e.g. BEAM_TIERS) and import it in your agent file.
+# HOW TO EXTEND:
+#   Add your own tier dict below and import it in your agent file.
 
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # ── Difficulty tier type ───────────────────────────────────────────────────────
-# One of these four strings — used consistently across all agents and MetaController
-DifficultyTier = str  # Literal["easy", "medium", "hard", "very_hard"]
+DifficultyTier = str  # Literal["very_easy", "easy", "medium", "hard", "very_hard"]
 
-ALL_TIERS = ["easy", "medium", "hard", "very_hard"]
+ALL_TIERS = ["very_easy", "easy", "medium", "hard", "very_hard"]
 
 # ── Keyword lists used by DifficultyEstimator ─────────────────────────────────
 POLICY_KEYWORDS = [
@@ -33,7 +32,7 @@ POLICY_KEYWORDS = [
 ]
 
 MODIFICATION_TYPES = [
-    "cancel",
+    # NOTE: "cancel" removed — already in POLICY_KEYWORDS with higher weight (+2).
     "modify",
     "change",
     "update",
@@ -52,8 +51,14 @@ VAGUE_TERMS = [
 ]
 
 # ── Per-agent budget tier definitions ─────────────────────────────────────────
-# Person 1 (ABF): maps difficulty → (num_ignore, max_tokens_thinking)
+
+# ABF: maps difficulty → (num_ignore, max_tokens_thinking)
 ABF_BUDGET_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "very_easy": {
+        "num_ignore": 0,
+        "max_tokens_thinking": 1500,
+        "description": "No forcing — trivial lookup tasks",
+    },
     "easy": {
         "num_ignore": 0,
         "max_tokens_thinking": 2000,
@@ -76,8 +81,36 @@ ABF_BUDGET_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
     },
 }
 
+# ReactReflection agent tier config
+REFLECTION_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "very_easy": {
+        "reflection_interval": 10,
+        "description": "Very infrequent reflection — trivial tasks",
+    },
+    "easy": {
+        "reflection_interval": 8,
+        "description": "Infrequent reflection — simple tasks rarely need it",
+    },
+    "medium": {
+        "reflection_interval": 5,
+        "description": "Moderate reflection frequency",
+    },
+    "hard": {
+        "reflection_interval": 4,
+        "description": "Frequent reflection — complex tasks need regular checkpoints",
+    },
+    "very_hard": {
+        "reflection_interval": 3,
+        "description": "Very frequent reflection — maximum self-monitoring",
+    },
+}
+
 # Best-of-N: maps difficulty → number of trajectories to sample
 BON_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "very_easy": {
+        "n": 1,
+        "description": "Single attempt — trivial tasks",
+    },
     "easy": {
         "n": 2,
         "description": "Two trajectories — simple tasks rarely need more",
@@ -96,14 +129,29 @@ BON_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
     },
 }
 
-# Person 2 (Beam-PG): add BEAM_TIERS here when ready
-# BEAM_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
-
-# Person 3 (Refine-CA): add REFINE_TIERS here when ready
-# REFINE_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
-
-# Person 4 (MCTS-RE): add MCTS_TIERS here when ready
-# MCTS_TIERS: Dict[DifficultyTier, Dict[str, Any]] = { ... }
+# PolicyGuard: maps difficulty → max retries for critic
+POLICY_GUARD_TIERS: Dict[DifficultyTier, Dict[str, Any]] = {
+    "very_easy": {
+        "max_retries": 1,
+        "description": "Minimal policy checking",
+    },
+    "easy": {
+        "max_retries": 2,
+        "description": "Standard policy checking",
+    },
+    "medium": {
+        "max_retries": 2,
+        "description": "Standard policy checking",
+    },
+    "hard": {
+        "max_retries": 2,
+        "description": "Standard policy checking",
+    },
+    "very_hard": {
+        "max_retries": 3,
+        "description": "Extra policy retries for complex tasks",
+    },
+}
 
 
 # ── Single shared estimator ────────────────────────────────────────────────────
@@ -111,7 +159,7 @@ class DifficultyEstimator:
     """
     Estimates task difficulty from a natural-language instruction string.
 
-    Returns one of: "easy" | "medium" | "hard" | "very_hard"
+    Returns one of: "very_easy" | "easy" | "medium" | "hard" | "very_hard"
 
     Scoring:
       +2  if instruction implies > 3 actions (multi-item, bulk tasks)
@@ -120,10 +168,11 @@ class DifficultyEstimator:
       +1  if ambiguous / vague language detected
 
     Thresholds:
-      0-1  → easy
-      2-3  → medium
-      4-5  → hard
-      6+   → very_hard
+      0-1  -> very_easy
+      2    -> easy
+      3-4  -> medium
+      5-6  -> hard
+      7+   -> very_hard
     """
 
     def estimate(self, instruction: str) -> DifficultyTier:
@@ -147,13 +196,72 @@ class DifficultyEstimator:
             score += 1
 
         if score <= 1:
+            return "very_easy"
+        elif score == 2:
             return "easy"
-        elif score <= 3:
+        elif score <= 4:
             return "medium"
-        elif score <= 5:
+        elif score <= 6:
             return "hard"
         else:
             return "very_hard"
+
+    def estimate_with_llm(
+        self,
+        instruction: str,
+        model: str,
+        base_url: str = "http://localhost:8005/v1",
+    ) -> DifficultyTier:
+        """
+        LLM-based difficulty estimation. Uses a single short LLM call
+        to classify task difficulty more accurately than keyword heuristics.
+
+        Falls back to keyword-based estimate() on any failure.
+        """
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(base_url=base_url, api_key="EMPTY")
+            prompt = (
+                "Rate the difficulty of this customer service task. Consider:\n"
+                "- How many tool calls are needed?\n"
+                "- Are there complex policy rules involved (cancellation eligibility, "
+                "payment constraints, refund conditions)?\n"
+                "- Does the user have conflicting or ambiguous requirements?\n"
+                "- Are there multi-step dependencies (search -> select -> book -> confirm)?\n\n"
+                "Difficulty levels:\n"
+                "1 = VERY_EASY: Trivial lookup (check status, get details)\n"
+                "2 = EASY: Single action with clear policy (simple return, basic change)\n"
+                "3 = MEDIUM: Standard 2-3 step task (booking, modification with one constraint)\n"
+                "4 = HARD: Multi-step with policy constraints (cancel with conditions, "
+                "multi-item exchange, split payments)\n"
+                "5 = VERY_HARD: Complex multi-step with conflicting constraints, "
+                "multiple policy checks, or ambiguous user intent\n\n"
+                f'Task: "{instruction[:500]}"\n\n'
+                "Reply with ONLY the number (1, 2, 3, 4, or 5):"
+            )
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=5,
+                temperature=0.0,
+            )
+            text = response.choices[0].message.content.strip()
+            match = re.search(r"[1-5]", text)
+            if match:
+                tier_map = {
+                    1: "very_easy",
+                    2: "easy",
+                    3: "medium",
+                    4: "hard",
+                    5: "very_hard",
+                }
+                return tier_map[int(match.group())]
+        except Exception as e:
+            print(f"[DifficultyEstimator] LLM estimation failed ({e}), using keyword fallback")
+
+        # Fallback to keyword-based estimation
+        return self.estimate(instruction)
 
     def _estimate_action_count(self, instruction: str) -> int:
         """Rough heuristic: count numeric/plural words that imply many actions."""
