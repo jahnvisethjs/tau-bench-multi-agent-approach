@@ -70,7 +70,7 @@ class MetaControllerAgent(Agent):
         easy      -> PolicyGuard (policy critic, ~10-20% overhead)
         medium    -> PACE (constraint register, ~20-30% overhead)
         hard      -> ReactReflection (periodic review, ~30-50% overhead)
-        very_hard -> Best-of-N (N=2 retry, ~2x cost)
+        very_hard -> Best-of-N (N=3 retry, ~2x cost)
     """
 
     def __init__(
@@ -154,7 +154,7 @@ class MetaControllerAgent(Agent):
                 model=model,
                 provider=provider,
                 temperature=temperature,
-                max_n=2,
+                max_n=3,
                 difficulty_override="very_hard",
             )
         else:
