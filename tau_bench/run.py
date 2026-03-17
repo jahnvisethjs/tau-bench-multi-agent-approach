@@ -21,14 +21,13 @@ def run(config: RunConfig) -> List[EnvRunResult]:
     assert config.env in ["retail", "airline"], "Only retail and airline envs are supported"
     assert config.model_provider in provider_list, "Invalid model provider"
     assert config.user_model_provider in provider_list, "Invalid user model provider"
-    assert config.agent_strategy in ["tool-calling", "act", "react", "few-shot", "ha-tts", "abf", "bon"], "Invalid agent strategy"
-    assert config.agent_strategy in ["tool-calling", "act", "react", "few-shot", "ha-tts", "abf", "react-reflection", "pace", "policy-guard", "best-of-n"], "Invalid agent strategy"
+    assert config.agent_strategy in ["tool-calling", "act", "react", "few-shot", "ha-tts", "abf", "react-reflection", "pace", "policy-guard", "best-of-n", "bon"], "Invalid agent strategy"
     assert config.task_split in ["train", "test", "dev"], "Invalid task split"
     assert config.user_strategy in [item.value for item in UserStrategy], "Invalid user strategy"
 
     random.seed(config.seed)
     time_str = datetime.now().strftime("%m%d%H%M%S")
-    ckpt_path = f"{config.log_dir}/{config.agent_strategy}-{config.model.split('/')[-1]}-{config.temperature}_range_{config.start_index}-{config.end_index}_user-{config.user_model}-{config.user_strategy}_{time_str}.json"
+    ckpt_path = f"{config.log_dir}/{config.agent_strategy}-{config.model.split('/')[-1]}-{config.temperature}_range_{config.start_index}-{config.end_index}_user-{config.user_model.split('/')[-1]}-{config.user_strategy}_{time_str}.json"
     if not os.path.exists(config.log_dir):
         os.makedirs(config.log_dir)
 
@@ -235,17 +234,6 @@ def agent_factory(
             model=config.model,
             provider=config.model_provider,
             temperature=config.temperature,
-        )
-    elif config.agent_strategy in ["bon", "best-of-n"]:
-        from tau_bench.agents.best_of_n_agent import BestOfNAgent
-
-        return BestOfNAgent(
-            tools_info=tools_info,
-            wiki=wiki,
-            model=config.model,
-            provider=config.model_provider,
-            temperature=config.temperature,
-            max_n=2,
         )
     else:
         raise ValueError(f"Unknown agent strategy: {config.agent_strategy}")
