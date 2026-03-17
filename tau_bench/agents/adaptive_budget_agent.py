@@ -24,6 +24,7 @@
 #   - REACT_INSTRUCTION / ACT_INSTRUCTION prompts
 
 import json
+import os
 from typing import Optional, List, Dict, Any, Tuple
 
 from openai import OpenAI
@@ -62,7 +63,7 @@ class AdaptiveBudgetForcingAgent(Agent):
         model: str,                                     # model name / path
         provider: str,                                  # kept for interface compat (unused — vLLM is direct)
         temperature: float = 0.0,
-        vllm_base_url: str = "http://localhost:8005/v1",
+        vllm_base_url: str = None,
         use_reasoning: bool = True,
         difficulty_override: Optional[DifficultyTier] = None,
     ) -> None:
@@ -84,9 +85,11 @@ class AdaptiveBudgetForcingAgent(Agent):
         )
 
         # vLLM via OpenAI-compatible API (same as original)
+        if vllm_base_url is None:
+            vllm_base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:8005/v1")
         self.client = OpenAI(
             base_url=vllm_base_url,
-            api_key="EMPTY",
+            api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"),
         )
         self.model_name  = model
         self.temperature = temperature

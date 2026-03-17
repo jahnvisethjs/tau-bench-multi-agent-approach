@@ -13,6 +13,7 @@
 # Used by MetaControllerAgent for "easy" tier tasks.
 
 import json
+import os
 from typing import Optional, List, Dict, Any
 
 from openai import OpenAI
@@ -75,7 +76,7 @@ class PolicyGuardAgent(Agent):
         model: str,
         provider: str,
         temperature: float = 0.0,
-        vllm_base_url: str = "http://localhost:8005/v1",
+        vllm_base_url: str = None,
         max_retries: int = 2,
     ) -> None:
         self.tools_info = tools_info
@@ -84,7 +85,9 @@ class PolicyGuardAgent(Agent):
         self.provider = provider
         self.temperature = temperature
         self.max_retries = max_retries
-        self.critic_client = OpenAI(base_url=vllm_base_url, api_key="EMPTY")
+        if vllm_base_url is None:
+            vllm_base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:8005/v1")
+        self.critic_client = OpenAI(base_url=vllm_base_url, api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
 
     def solve(
         self, env: Env, task_index: Optional[int] = None, max_num_steps: int = 30

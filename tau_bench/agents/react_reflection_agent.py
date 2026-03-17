@@ -16,6 +16,7 @@
 # Can also be run standalone via: --agent-strategy react-reflection
 
 import json
+import os
 from typing import Optional, List, Dict, Any, Tuple
 
 from openai import OpenAI
@@ -57,7 +58,7 @@ class ReactReflectionAgent(Agent):
         model: str,
         provider: str,
         temperature: float = 0.0,
-        vllm_base_url: str = "http://localhost:8005/v1",
+        vllm_base_url: str = None,
         use_reasoning: bool = True,
         reflection_interval: int = 4,
     ) -> None:
@@ -71,9 +72,11 @@ class ReactReflectionAgent(Agent):
             + ENHANCED_GUIDELINES
         )
 
+        if vllm_base_url is None:
+            vllm_base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:8005/v1")
         self.client = OpenAI(
             base_url=vllm_base_url,
-            api_key="EMPTY",
+            api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"),
         )
         self.model_name = model
         self.provider = provider

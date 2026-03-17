@@ -210,7 +210,7 @@ class DifficultyEstimator:
         self,
         instruction: str,
         model: str,
-        base_url: str = "http://localhost:8005/v1",
+        base_url: str = None,
     ) -> DifficultyTier:
         """
         LLM-based difficulty estimation. Uses a single short LLM call
@@ -219,9 +219,12 @@ class DifficultyEstimator:
         Falls back to keyword-based estimate() on any failure.
         """
         try:
+            import os
             from openai import OpenAI
 
-            client = OpenAI(base_url=base_url, api_key="EMPTY")
+            if base_url is None:
+                base_url = os.environ.get("OPENAI_API_BASE", "http://localhost:8005/v1")
+            client = OpenAI(base_url=base_url, api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
             prompt = (
                 "Rate the difficulty of this customer service task. Consider:\n"
                 "- How many tool calls are needed?\n"
